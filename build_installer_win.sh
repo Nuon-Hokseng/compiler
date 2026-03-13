@@ -250,24 +250,17 @@ cp "$SCRIPT_DIR/backend/dist/backend.exe"  "$BUILD_DIR/payload/backend/backend.e
 cp "$SCRIPT_DIR/backend/.env.enc"          "$BUILD_DIR/payload/backend/.env.enc"
 echo "[OK] Backend payload: backend.exe + .env.enc only"
 
-# Frontend: only .next build output + package.json + node_modules + .env.enc
-rsync -a \
-    --exclude=".git" \
-    --exclude=".env" \
-    --exclude="src" \
-    --exclude="app" \
-    --exclude="pages" \
-    --exclude="components" \
-    --exclude="lib" \
-    --exclude="hooks" \
-    --exclude="utils" \
-    --exclude="styles" \
-    --exclude="*.ts" \
-    --exclude="*.tsx" \
-    --exclude="decrypt-env.mjs" \
-    --exclude="load-env.js" \
-    "$SCRIPT_DIR/frontend/" "$BUILD_DIR/payload/frontend/"
-echo "[OK] Frontend payload: .next + package.json only"
+# Frontend: only .next build output + package.json + .env.enc
+# Use xcopy/cp instead of rsync (not available on Windows runners)
+mkdir -p "$BUILD_DIR/payload/frontend"
+cp -r "$SCRIPT_DIR/frontend/.next"          "$BUILD_DIR/payload/frontend/.next"
+cp    "$SCRIPT_DIR/frontend/package.json"   "$BUILD_DIR/payload/frontend/package.json"
+cp    "$SCRIPT_DIR/frontend/.env.enc"       "$BUILD_DIR/payload/frontend/.env.enc"
+# Copy next.config.js if it exists
+if [ -f "$SCRIPT_DIR/frontend/next.config.js" ]; then
+    cp "$SCRIPT_DIR/frontend/next.config.js" "$BUILD_DIR/payload/frontend/next.config.js"
+fi
+echo "[OK] Frontend payload: .next + package.json + .env.enc only"
 
 cp "$SCRIPT_DIR/setup.ps1"     "$BUILD_DIR/setup.ps1"
 cp "$SCRIPT_DIR/installer.nsi" "$BUILD_DIR/installer.nsi"
