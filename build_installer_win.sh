@@ -68,18 +68,41 @@ for item in os.listdir("."):
 print("Local packages found:", local_packages)
 
 hidden = local_packages + [
+    # uvicorn
     "uvicorn", "uvicorn.logging", "uvicorn.loops", "uvicorn.loops.auto",
     "uvicorn.protocols", "uvicorn.protocols.http", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets", "uvicorn.protocols.websockets.auto",
     "uvicorn.lifespan", "uvicorn.lifespan.on",
-    "fastapi", "pydantic",
+    # fastapi
+    "fastapi", "fastapi.middleware", "fastapi.middleware.cors",
+    "fastapi.middleware.gzip", "fastapi.middleware.httpsredirect",
+    "fastapi.middleware.trustedhost", "fastapi.middleware.wsgi",
+    "fastapi.responses", "fastapi.routing", "fastapi.staticfiles",
+    "fastapi.templating", "fastapi.security", "fastapi.background",
+    "fastapi.encoders", "fastapi.exceptions", "fastapi.openapi",
+    # starlette
+    "starlette", "starlette.routing", "starlette.requests", "starlette.responses",
+    "starlette.middleware", "starlette.middleware.cors", "starlette.middleware.base",
+    "starlette.middleware.gzip", "starlette.middleware.httpsredirect",
+    "starlette.middleware.trustedhost", "starlette.middleware.wsgi",
+    "starlette.staticfiles", "starlette.templating", "starlette.background",
+    "starlette.concurrency", "starlette.config", "starlette.convertors",
+    "starlette.datastructures", "starlette.exceptions", "starlette.formparsers",
+    "starlette.testclient", "starlette.types", "starlette.websockets",
+    # pydantic
+    "pydantic", "pydantic.v1",
     "pydantic.deprecated.class_validators", "pydantic.deprecated.config", "pydantic.deprecated.tools",
-    "starlette", "starlette.routing", "starlette.middleware",
-    "anyio", "anyio.from_thread",
+    # anyio
+    "anyio", "anyio.from_thread", "anyio.abc", "anyio.streams",
+    "anyio.streams.memory", "anyio.streams.stapled", "anyio.streams.tls",
+    # other
     "dotenv", "cryptography",
     "langchain", "langchain_core", "langchain_community",
     "langchain_openai", "langchain_anthropic", "langchain_ollama",
     "supabase", "playwright",
+    "multipart", "python_multipart",
+    "email_validator", "httpx", "httpcore",
+    "jose", "passlib",
 ]
 
 lines = [
