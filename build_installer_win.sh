@@ -59,6 +59,18 @@ import os
 # Auto-discover all local Python packages (folders with __init__.py)
 local_packages = []
 local_datas = [(".env.enc", ".")]
+
+# Include playwright driver files
+import subprocess, sys
+try:
+    result = subprocess.run([sys.executable, "-c", "import playwright; import os; print(os.path.dirname(playwright.__file__))"],
+                            capture_output=True, text=True)
+    pw_path = result.stdout.strip()
+    if pw_path and os.path.exists(pw_path):
+        local_datas.append((pw_path, "playwright"))
+        print("Playwright path:", pw_path)
+except Exception as e:
+    print("Could not find playwright path:", e)
 for item in os.listdir("."):
     if os.path.isdir(item) and os.path.exists(os.path.join(item, "__init__.py")):
         if item not in ["dist", "build_tmp", "__pycache__", "venv"]:
@@ -99,7 +111,23 @@ hidden = local_packages + [
     "dotenv", "cryptography",
     "langchain", "langchain_core", "langchain_community",
     "langchain_openai", "langchain_anthropic", "langchain_ollama",
-    "supabase", "playwright",
+    "supabase",
+    "playwright", "playwright.sync_api", "playwright.async_api",
+    "playwright._impl._api_types", "playwright._impl._browser",
+    "playwright._impl._browser_context", "playwright._impl._browser_type",
+    "playwright._impl._cdp_session", "playwright._impl._chromium_browser_context",
+    "playwright._impl._console_message", "playwright._impl._dialog",
+    "playwright._impl._download", "playwright._impl._element_handle",
+    "playwright._impl._errors", "playwright._impl._event_context_manager",
+    "playwright._impl._file_chooser", "playwright._impl._frame",
+    "playwright._impl._har_router", "playwright._impl._helper",
+    "playwright._impl._input", "playwright._impl._js_handle",
+    "playwright._impl._keyboard", "playwright._impl._locator",
+    "playwright._impl._mouse", "playwright._impl._network",
+    "playwright._impl._page", "playwright._impl._playwright",
+    "playwright._impl._connection", "playwright._impl._transport",
+    "playwright._impl._driver", "playwright._impl._greenlets",
+    "playwright._impl._sync_base", "playwright._impl._async_base",
     "multipart", "python_multipart",
     "email_validator", "httpx", "httpcore",
     "jose", "passlib",
