@@ -56,94 +56,67 @@ pip install -r requirements.txt --quiet 2>/dev/null || true
 python3 << 'PYEOF'
 import os
 
-import os, glob
-
 # Auto-discover all local Python packages (folders with __init__.py)
 local_packages = []
-for item in os.listdir("."):
-    if os.path.isdir(item) and os.path.exists(os.path.join(item, "__init__.py")):
-        local_packages.append(item)
-
-# Auto-discover all .py files and folders to include as datas
 local_datas = [(".env.enc", ".")]
 for item in os.listdir("."):
-    if os.path.isdir(item) and item not in ["dist", "build_tmp", "__pycache__", "venv", ".git"]:
-        if os.path.exists(os.path.join(item, "__init__.py")):
+    if os.path.isdir(item) and os.path.exists(os.path.join(item, "__init__.py")):
+        if item not in ["dist", "build_tmp", "__pycache__", "venv"]:
+            local_packages.append(item)
             local_datas.append((item, item))
 
 print("Local packages found:", local_packages)
-print("Datas:", local_datas)
 
-spec = f'''# -*- mode: python ; coding: utf-8 -*-
-a = Analysis(
-    ["run.py"],
-    pathex=["."],
-    binaries=[],
-    datas={local_datas},
-    hiddenimports={local_packages + [
-        "uvicorn",
-        "uvicorn.logging",
-        "uvicorn.loops",
-        "uvicorn.loops.auto",
-        "uvicorn.protocols",
-        "uvicorn.protocols.http",
-        "uvicorn.protocols.http.auto",
-        "uvicorn.protocols.websockets",
-        "uvicorn.protocols.websockets.auto",
-        "uvicorn.lifespan",
-        "uvicorn.lifespan.on",
-        "fastapi",
-        "pydantic",
-        "pydantic.deprecated.class_validators",
-        "pydantic.deprecated.config",
-        "pydantic.deprecated.tools",
-        "starlette",
-        "starlette.routing",
-        "starlette.middleware",
-        "anyio",
-        "anyio.from_thread",
-        "dotenv",
-        "cryptography",
-        "langchain",
-        "langchain_core",
-        "langchain_community",
-        "langchain_openai",
-        "langchain_anthropic",
-        "langchain_ollama",
-        "supabase",
-        "playwright",
-    ]},
-    hookspath=[],
-    hooksconfig={{}},
-    runtime_hooks=[],
-    excludes=[],
-    noarchive=False,
-)'''
+hidden = local_packages + [
+    "uvicorn", "uvicorn.logging", "uvicorn.loops", "uvicorn.loops.auto",
+    "uvicorn.protocols", "uvicorn.protocols.http", "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.websockets", "uvicorn.protocols.websockets.auto",
+    "uvicorn.lifespan", "uvicorn.lifespan.on",
+    "fastapi", "pydantic",
+    "pydantic.deprecated.class_validators", "pydantic.deprecated.config", "pydantic.deprecated.tools",
+    "starlette", "starlette.routing", "starlette.middleware",
+    "anyio", "anyio.from_thread",
+    "dotenv", "cryptography",
+    "langchain", "langchain_core", "langchain_community",
+    "langchain_openai", "langchain_anthropic", "langchain_ollama",
+    "supabase", "playwright",
+]
 
-pyz = PYZ(a.pure)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name="backend",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-'''
+lines = [
+    "# -*- mode: python ; coding: utf-8 -*-",
+    "a = Analysis(",
+    '    ["run.py"],',
+    '    pathex=["."],',
+    "    binaries=[],",
+    "    datas=" + repr(local_datas) + ",",
+    "    hiddenimports=" + repr(hidden) + ",",
+    "    hookspath=[],",
+    "    hooksconfig={},",
+    "    runtime_hooks=[],",
+    "    excludes=[],",
+    "    noarchive=False,",
+    ")",
+    "pyz = PYZ(a.pure)",
+    "exe = EXE(",
+    "    pyz, a.scripts, a.binaries, a.datas, [],",
+    '    name="backend",',
+    "    debug=False,",
+    "    bootloader_ignore_signals=False,",
+    "    strip=False,",
+    "    upx=True,",
+    "    upx_exclude=[],",
+    "    runtime_tmpdir=None,",
+    "    console=True,",
+    "    disable_windowed_traceback=False,",
+    "    argv_emulation=False,",
+    "    target_arch=None,",
+    "    codesign_identity=None,",
+    "    entitlements_file=None,",
+    ")",
+]
+
 with open("backend.spec", "w") as f:
-    f.write(spec)
+    f.write("\n".join(lines))
 print("[OK] backend.spec written")
 PYEOF
 
