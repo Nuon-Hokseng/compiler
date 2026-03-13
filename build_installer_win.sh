@@ -56,15 +56,31 @@ pip install -r requirements.txt --quiet 2>/dev/null || true
 python3 << 'PYEOF'
 import os
 
-spec = '''# -*- mode: python ; coding: utf-8 -*-
+import os, glob
+
+# Auto-discover all local Python packages (folders with __init__.py)
+local_packages = []
+for item in os.listdir("."):
+    if os.path.isdir(item) and os.path.exists(os.path.join(item, "__init__.py")):
+        local_packages.append(item)
+
+# Auto-discover all .py files and folders to include as datas
+local_datas = [(".env.enc", ".")]
+for item in os.listdir("."):
+    if os.path.isdir(item) and item not in ["dist", "build_tmp", "__pycache__", "venv", ".git"]:
+        if os.path.exists(os.path.join(item, "__init__.py")):
+            local_datas.append((item, item))
+
+print("Local packages found:", local_packages)
+print("Datas:", local_datas)
+
+spec = f'''# -*- mode: python ; coding: utf-8 -*-
 a = Analysis(
     ["run.py"],
     pathex=["."],
     binaries=[],
-    datas=[
-        (".env.enc", "."),
-    ],
-    hiddenimports=[
+    datas={local_datas},
+    hiddenimports={local_packages + [
         "uvicorn",
         "uvicorn.logging",
         "uvicorn.loops",
@@ -96,13 +112,14 @@ a = Analysis(
         "langchain_ollama",
         "supabase",
         "playwright",
-    ],
+    ]},
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={{}},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-)
+)'''
+
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
