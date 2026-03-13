@@ -139,47 +139,41 @@ set FRONTEND=%APP_DIR%\frontend
 set PLAYWRIGHT_BROWSERS_PATH=%BACKEND%\.playwright-browsers
 set PATH=%PATH%;%APPDATA%\npm;%PROGRAMFILES%\nodejs
 
+echo Stopping any existing instances...
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000 " ^| findstr "LISTENING"') do taskkill /F /PID %%a 2>nul
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 " ^| findstr "LISTENING"') do taskkill /F /PID %%a 2>nul
 timeout /t 1 /nobreak >nul
 
 echo Starting backend...
-start "" /B cmd /c "cd /d ""%BACKEND%"" && backend.exe"
+start "IG Backend" cmd /k "cd /d ""%BACKEND%"" && backend.exe"
 
 echo Starting frontend...
-start "" /B cmd /c "cd /d ""%FRONTEND%"" && npm start"
+start "IG Frontend" cmd /k "cd /d ""%FRONTEND%"" && npm start"
 
-echo Waiting for backend...
+echo Waiting for backend on port 8000...
 :wait_backend
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 netstat -an | findstr ":8000 " | findstr "LISTENING" >nul 2>&1
 if errorlevel 1 goto wait_backend
-echo Backend ready.
+echo [OK] Backend ready.
 
-echo Waiting for frontend...
+echo Waiting for frontend on port 3000...
 :wait_frontend
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 netstat -an | findstr ":3000 " | findstr "LISTENING" >nul 2>&1
 if errorlevel 1 goto wait_frontend
-echo Frontend ready.
+echo [OK] Frontend ready.
 
 start "" "http://localhost:3000"
 
 echo.
-echo IG Automation is running.
-echo Close this window to stop the app.
+echo ================================================
+echo   IG Automation is running!
+echo   Backend  : http://localhost:8000
+echo   Frontend : http://localhost:3000
+echo   Close the Backend and Frontend windows to stop.
+echo ================================================
 echo.
-
-:monitor
-timeout /t 10 /nobreak >nul
-netstat -an | findstr ":3000 " | findstr "LISTENING" >nul 2>&1
-if errorlevel 1 goto shutdown
-goto monitor
-
-:shutdown
-echo Shutting down...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000 " ^| findstr "LISTENING"') do taskkill /F /PID %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 " ^| findstr "LISTENING"') do taskkill /F /PID %%a 2>nul
 exit
 "@
 [System.IO.File]::WriteAllText("$APP_DIR\start.bat", $startBat, [System.Text.ASCIIEncoding]::new())
