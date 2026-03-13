@@ -86,7 +86,7 @@ Section "Install" SecMain
 SectionEnd
 
 Function RunSetup
-    Exec '$SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NoProfile -NoExit -File $INSTDIR\setup.ps1'
+    Exec '$WINDIR\system32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NoProfile -NoExit -File "$INSTDIR\setup.ps1"'
 FunctionEnd
 
 Section "Uninstall"
