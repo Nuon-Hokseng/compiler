@@ -24,7 +24,7 @@ Write-Log "================================================"
 Write-Log "APP_DIR  = $APP_DIR"
 Write-Log "Log file = $LOG"
 
-# ── VERIFY INSTALL ────────────────────────────────────
+# VERIFY INSTALL
 if (-not (Test-Path $APP_DIR)) {
     Write-Log "[ERROR] $APP_DIR not found. Please reinstall." "Red"
     exit 1
@@ -39,7 +39,7 @@ if (-not (Test-Path "$FRONTEND\.next")) {
 }
 Write-Log "[OK] Install verified." "Green"
 
-# ── STEP 1: NODE.JS ───────────────────────────────────
+# STEP 1: NODE.JS
 Write-Step "[Step 1/3] Checking Node.js..."
 $hasNode = $null
 try { $hasNode = & node --version 2>&1 } catch {}
@@ -66,12 +66,12 @@ if (-not $hasNode -or $hasNode -notmatch "v\d") {
 }
 Write-Log "[OK] Node: $(& node --version 2>&1)" "Green"
 
-# ── STEP 2: FRONTEND npm install (no build needed) ────
+# STEP 2: FRONTEND npm install
 Write-Step "[Step 2/3] Installing frontend runtime packages..."
 Set-Location $FRONTEND
 
-# Inject env vars for npm start
 $utf8NoBOM = [System.Text.UTF8Encoding]::new($false)
+
 $loadEnvContent = @'
 const fs     = require('fs');
 const path   = require('path');
@@ -109,17 +109,15 @@ if (Test-Path $nextCfg) {
     }
 }
 
-Write-Log "   Running npm install (production only)..."
+Write-Log "   Running npm install..."
 & npm install --omit=dev --silent
 Write-Log "[OK] Frontend packages installed." "Green"
 
-# ── STEP 3: PLAYWRIGHT CHROMIUM ───────────────────────
+# STEP 3: PLAYWRIGHT CHROMIUM
 Write-Step "[Step 3/3] Installing Playwright Chromium..."
 $env:PLAYWRIGHT_BROWSERS_PATH = "$BACKEND\.playwright-browsers"
 
-# Use latest stable Playwright — 1.44.0 CDN URLs are dead
 Write-Log "   Installing Playwright..."
-Set-Location $FRONTEND
 & npm install playwright --silent 2>$null
 
 $playwrightCmd = $null
@@ -128,22 +126,24 @@ if (Test-Path "$FRONTEND\node_modules\.bin\playwright.cmd") {
 }
 
 Write-Log "   Downloading Chromium browser..."
+$chromiumOk = $false
 try {
     if ($playwrightCmd) {
-        & $playwrightCmd install chromium 2>&1 | ForEach-Object { Write-Log "   $_" }
+        & $playwrightCmd install chromium
     } else {
-        & npx playwright install chromium 2>&1 | ForEach-Object { Write-Log "   $_" }
+        & npx playwright install chromium
     }
     if ($LASTEXITCODE -eq 0) {
+        $chromiumOk = $true
         Write-Log "[OK] Playwright Chromium installed." "Green"
     } else {
-        Write-Log "[WARN] Chromium download failed — will retry on first launch." "Yellow"
+        Write-Log "[WARN] Chromium download failed - will retry on first launch." "Yellow"
     }
 } catch {
-    Write-Log "[WARN] Playwright install skipped: $_" "Yellow"
+    Write-Log "[WARN] Playwright install skipped: $($_.Exception.Message)" "Yellow"
 }
 
-# ── CREATE LAUNCHER ───────────────────────────────────
+# CREATE LAUNCHER
 Write-Step "Creating launcher and Desktop shortcut..."
 
 $startBat = @"
@@ -195,7 +195,7 @@ exit
 [System.IO.File]::WriteAllText("$APP_DIR\start.bat", $startBat, [System.Text.ASCIIEncoding]::new())
 Write-Log "   start.bat written."
 
-# ── SHORTCUT ──────────────────────────────────────────
+# SHORTCUT
 $loggedInUser = $null
 try { $loggedInUser = (Get-WmiObject -Class Win32_ComputerSystem).UserName -replace '.*\\','' } catch {}
 
@@ -205,7 +205,9 @@ $desktopPaths += @("$env:USERPROFILE\Desktop", "$env:PUBLIC\Desktop", "C:\Users\
 
 foreach ($dp in ($desktopPaths | Select-Object -Unique)) {
     $existing = "$dp\IG Automation.lnk"
-    if (Test-Path $existing) { Remove-Item $existing -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $existing) {
+        Remove-Item $existing -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $iconRefreshCode = @"
@@ -234,7 +236,7 @@ foreach ($dp in ($desktopPaths | Select-Object -Unique)) {
             Write-Log "[OK] Shortcut created: $dp\IG Automation.lnk" "Green"
             $shortcutCreated = $true
         } catch {
-            Write-Log "   Failed at $dp`: $_" "Yellow"
+            Write-Log "   Failed at $dp`: $($_.Exception.Message)" "Yellow"
         }
     }
 }
@@ -245,4 +247,3 @@ Write-Log "  ALL DONE!" "Magenta"
 Write-Log "  Double-click 'IG Automation' on your Desktop" "Magenta"
 Write-Log "================================================"
 Write-Log "Log: $LOG"
-Write-Log "This window will stay open. Close it manually when ready."
