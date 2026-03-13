@@ -117,15 +117,31 @@ Write-Log "[OK] Frontend packages installed." "Green"
 Write-Step "[Step 3/3] Installing Playwright Chromium..."
 $env:PLAYWRIGHT_BROWSERS_PATH = "$BACKEND\.playwright-browsers"
 
-# Install playwright npm package just for the CLI
+# Use latest stable Playwright — 1.44.0 CDN URLs are dead
+Write-Log "   Installing Playwright..."
 Set-Location $FRONTEND
-& npm install playwright@1.44.0 --silent 2>$null
+& npm install playwright --silent 2>$null
+
+$playwrightCmd = $null
 if (Test-Path "$FRONTEND\node_modules\.bin\playwright.cmd") {
-    & "$FRONTEND\node_modules\.bin\playwright.cmd" install chromium
-} else {
-    & npx playwright install chromium
+    $playwrightCmd = "$FRONTEND\node_modules\.bin\playwright.cmd"
 }
-Write-Log "[OK] Playwright Chromium installed." "Green"
+
+Write-Log "   Downloading Chromium browser..."
+try {
+    if ($playwrightCmd) {
+        & $playwrightCmd install chromium 2>&1 | ForEach-Object { Write-Log "   $_" }
+    } else {
+        & npx playwright install chromium 2>&1 | ForEach-Object { Write-Log "   $_" }
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "[OK] Playwright Chromium installed." "Green"
+    } else {
+        Write-Log "[WARN] Chromium download failed — will retry on first launch." "Yellow"
+    }
+} catch {
+    Write-Log "[WARN] Playwright install skipped: $_" "Yellow"
+}
 
 # ── CREATE LAUNCHER ───────────────────────────────────
 Write-Step "Creating launcher and Desktop shortcut..."
