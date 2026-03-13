@@ -38,7 +38,6 @@ from browser.scraper import (
     MAX_COMMENTERS_PER_POST,
     get_delay,
 )
-# Re-use the sync helpers from scraper_integration (same logic, no duplication)
 from browser.scraper_integration import (
     _human_delay_sync,
     _maybe_take_break_sync,
@@ -51,8 +50,13 @@ from browser.scraper_integration import (
 
 
 def _parse_count(val: str) -> int:
-    """Parse follower / following count strings like '1,234' or '12.3K'."""
-    val = val.strip().replace(",", "")
+    """
+    Parse follower / following count strings like '1,234' or '12.3K'.
+
+    FIX Bug 1: strip both commas AND spaces before processing, and use
+    a more permissive float conversion so '12.3K' is handled correctly.
+    """
+    val = val.strip().replace(",", "").replace(" ", "")
     multiplier = 1
     if val.lower().endswith("k"):
         multiplier = 1_000
@@ -93,12 +97,18 @@ def _extract_sync_profile_data(page, username: str, log=print) -> dict:
                 parts = og_desc.split(" - ", 1)
                 data["bio"] = parts[1][:300].strip() if len(parts) > 1 else ""
 
-                nums = re.findall(r"([\d,.KkMm]+)\s+(Follower|Following|Post)", og_desc)
+                # FIX Bug 1: more permissive regex — dot is outside the
+                # character class so decimal values like "12.3K" are captured.
+                # Also matches plurals (Followers, Posts) for robustness.
+                nums = re.findall(
+                    r"([\d,]+\.?\d*\s*[KkMm]?)\s+(Followers?|Following|Posts?)",
+                    og_desc,
+                )
                 for val, label in nums:
                     parsed = _parse_count(val)
-                    if "Follower" in label:
+                    if "ollower" in label:       # Follower / Followers
                         data["followers_count"] = parsed
-                    elif "Following" in label:
+                    elif "ollowing" in label:
                         data["following_count"] = parsed
             else:
                 data["bio"] = ""
@@ -142,8 +152,10 @@ def _extract_sync_profile_data(page, username: str, log=print) -> dict:
 
 
 # ── Work / lifestyle signal keywords (used by pre-filter) ───────────
+# FIX Bug 3: all entries are lowercased so they match `all_text.lower()`
+# without any case mismatch (was: "IT", "DIY", "SNS" etc. never matched).
 
-WORK_LIFESTYLE_SIGNALS = [
+WORK_LIFESTYLE_SIGNALS = [s.lower() for s in [
     # English signals
     "ceo", "founder", "coach", "mentor", "entrepreneur", "business",
     "consultant", "freelance", "creator", "artist", "photographer",
@@ -157,8 +169,44 @@ WORK_LIFESTYLE_SIGNALS = [
     "転職", "仕事", "働く", "社会人", "新卒", "正社員", "派遣",
     "車", "ドライブ", "大学", "専門学校", "卒業",
     "稼ぐ", "お金", "収入", "フリーランス",
-    "地方", "田舎",
-]
+    "地方", "田舎", "先生", "会計士", "公務員", "教師", "IT", "エンジニア",
+    "プログラマー", "デザイナー", "編集者", "ライター", "営業", "看護師",
+    "医師", "歯科", "薬剤師", "保育士", "介護士", "弁護士",
+    "司法書士", "行政書士", "税理士", "教師", "秘書", "店員", "事務",
+    "受付", "美容師", "モデル", "俳優", "女優", "歌手", "ミュージシャン",
+    "クリエイター", "イラストレーター", "カメラマン", "フォトグラファー",
+    "動画編集", "youtuber", "インフルエンサー", "通訳", "翻訳", "学生",
+    "大学生", "短大生", "高校生", "専門学生", "大学院生", "新卒", "社会人",
+    "転職", "独立", "副業", "兼業", "在宅", "リモート", "起業", "経営者",
+    "自営業", "飲食", "バリスタ", "シェフ", "師匠", "オーナー", "カフェ",
+    "ショップ", "ブランド", "スタイリスト", "カウンセラー", "コーチ",
+    "コンサル", "トレーナー", "インストラクター", "ヨガ", "ピラティス",
+    "体育", "スポーツ選手", "サッカー", "野球", "テニス", "バスケットボール",
+    "陸上", "スポーツ", "ボディビル", "ダンサー", "俳優", "声優", "作家",
+    "ディレクター", "編集者", "主婦", "主夫", "ママ", "パパ", "子育て",
+    "ペット", "犬", "猫", "うさぎ", "趣味", "旅行", "バックパッカー",
+    "世界一周", "海外移住", "英語", "留学", "交換留学", "国際", "外国人",
+    "国際結婚", "婚活", "恋愛", "保険", "金融", "投資", "資産運用", "節約",
+    "副収入", "おうち時間", "DIY", "料理", "カフェ巡り", "食べ歩き",
+    "グルメ", "アウトドア", "キャンプ", "釣り", "登山", "ランニング",
+    "ジョギング", "筋トレ", "フィットネス", "健康", "美容", "スキンケア",
+    "ネイル", "メイク", "ファッション", "コーデ", "アクセサリー", "着物",
+    "着付け", "和装", "茶道", "華道", "書道", "音楽", "演奏", "ピアノ",
+    "ギター", "バイオリン", "カラオケ", "映画", "ドラマ", "アニメ", "漫画",
+    "イラスト", "ゲーム", "コスプレ", "旅行好き", "温泉", "ドライブ",
+    "愛車", "自転車", "整体", "マッサージ", "エステ", "カウンセリング",
+    "心理", "ライフコーチ", "自己啓発", "起業家", "副業女子", "副業男子",
+    "資産形成", "年収アップ", "転職活動", "転職エージェント", "会社員",
+    "正社員", "アルバイト", "パート", "フリーター", "物販", "せどり",
+    "ハンドメイド", "輸入", "輸出", "クラウドワークス", "ランサーズ",
+    "ココナラ", "fiverr", "スキルシェア", "ネットビジネス", "SNS運用",
+    "集客", "LINE公式", "note", "ブログ", "アフィリエイト", "EC",
+    "ネットショップ", "動画制作", "ライブ配信", "写真", "インスタ映え",
+    "観光", "旅行記", "食レポ", "お菓子作り", "パン作り", "ヴィーガン",
+    "ベジタリアン", "子ども", "家庭", "教育", "塾", "教師", "教室",
+    "ワークショップ", "ボランティア", "地域活性化", "農業", "自然",
+    "地方創生", "移住", "サブスク",
+]]
 
 
 def _pre_filter_profile(
@@ -177,6 +225,10 @@ def _pre_filter_profile(
       - No niche keywords found in bio / recent captions
       - No work / lifestyle signals detected
       - Low followers (< 100) or weak activity
+
+    NOTE: This function navigates the page to the profile URL.
+    Callers must handle restoring page state after this returns
+    (e.g. page.go_back() to return to the hashtag listing).
     """
     try:
         page.goto(
@@ -208,6 +260,8 @@ def _pre_filter_profile(
                     if len(word) > 2:
                         niche_keywords.add(word)
 
+        # FIX Bug 3 (belt-and-suspenders): all_text is lowercased and
+        # signals are already lowercased — comparison is always safe.
         all_text = (bio + " " + " ".join(captions)).lower()
 
         # ── Four criteria ──
@@ -219,7 +273,7 @@ def _pre_filter_profile(
         # Skip ONLY when ALL four hold
         if bio_empty and no_niche and no_signals and low_followers:
             log(
-                f"      \u274c @{username} filtered out: "
+                f"      ❌ @{username} filtered out: "
                 f"empty bio, no niche match, no work signals, "
                 f"low followers ({followers})"
             )
@@ -234,12 +288,15 @@ def _pre_filter_profile(
             reasons.append("work signals")
         if not low_followers:
             reasons.append(f"{followers} followers")
-        log(f"      \u2705 @{username} pre-filter PASSED ({', '.join(reasons)})")
+        log(f"      ✅ @{username} pre-filter PASSED ({', '.join(reasons)})")
         return True
 
     except Exception as e:
-        log(f"      \u26a0\ufe0f Pre-filter error for @{username}: {e}")
+        log(f"      ⚠️ Pre-filter error for @{username}: {e}")
         return True  # keep on error — let qualification decide
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  Scraper agent — visits hashtag pages → opens posts → extracts
 #  post owners + commenters.  Adapted from scraper_integration.py but
 #  takes hashtags directly from the discovery plan (no config lookup).
@@ -262,11 +319,11 @@ def _scrape_hashtags_from_plan(
     Navigate to hashtag pages from the discovery plan, open individual
     posts, and extract post owners + commenters.
 
-    Each extracted commenter is **pre-filtered**: a quick profile visit
-    checks bio length, niche keywords, work signals, and follower count.
-    Only profiles that pass at least one criterion are kept.
-
-    Uses the SAME sync Playwright page as the scrolling loop.
+    FIX Bug 2: raw_candidates are fully collected from each post FIRST,
+    then pre-filtering runs as a dedicated second pass. This ensures
+    _pre_filter_profile's page.goto() calls don't clobber the page state
+    mid-extraction. After pre-filtering, page.go_back() restores the
+    hashtag listing so subsequent post links remain accessible.
 
     Returns a list of unique usernames that passed the pre-filter.
     """
@@ -290,14 +347,12 @@ def _scrape_hashtags_from_plan(
         log(f"  🏷️ Navigating to #{clean_tag} via search bar...")
 
         try:
-            # Use the search engine to type the hashtag naturally
             if not perform_search(page, f"#{clean_tag}", "hashtag", log):
                 log(f"  ⚠️ Could not navigate to #{clean_tag}, skipping...")
                 continue
 
             _human_delay_sync("page_load")
 
-            # Check for login redirect
             if "login" in page.url.lower():
                 log("  ⚠️ Redirected to login — skipping this hashtag")
                 continue
@@ -330,7 +385,7 @@ def _scrape_hashtags_from_plan(
                 log(f"  ⏭️ Skipping {skipped} already-scraped posts")
             log(f"  📝 {len(new_post_urls)} new posts to scrape")
 
-            # Visit each post and extract owner + commenters
+            # Visit each post, extract candidates, then pre-filter
             for i, post_url in enumerate(new_post_urls):
                 if collected >= max_accounts or should_stop():
                     break
@@ -346,31 +401,36 @@ def _scrape_hashtags_from_plan(
                         pass
                     _human_delay_sync("read_content")
 
-                    # Extract post owner
-                    owner = _extract_post_owner(page)
-                    if owner and owner not in seen:
-                        log(f"      \U0001f464 Owner: @{owner}")
-
-                    # Extract commenters
+                    # ── Phase A: collect all candidates from this post ──
+                    # (no navigation happens here — page stays on the post)
                     raw_candidates: list[str] = []
+
+                    owner = _extract_post_owner(page)
                     if owner:
+                        log(f"      👤 Owner: @{owner}")
                         raw_candidates.append(owner)
-                        log("      \U0001f4ac Scrolling comments...")
+
+                        log("      💬 Scrolling comments...")
                         commenters = _extract_commenters(
                             page, owner, MAX_COMMENTERS_PER_POST, log
                         )
                         if commenters:
-                            log(f"      \U0001f4ac Found {len(commenters)} commenters")
+                            log(f"      💬 Found {len(commenters)} commenters")
                             raw_candidates.extend(commenters)
                         else:
-                            log("      \U0001f4ac No commenters found")
+                            log("      💬 No commenters found")
 
-                    # ── Pre-filter: visit each candidate's profile ──
+                    # De-duplicate against already-seen before pre-filtering
+                    raw_candidates = [c for c in raw_candidates if c not in seen]
+
+                    # ── Phase B: pre-filter (navigates away per candidate) ──
+                    # FIX Bug 2: this now runs AFTER all extraction is done,
+                    # so page state is not corrupted mid-post.
                     if raw_candidates and target_interest:
-                        log(f"      \U0001f50d Pre-filtering {len(raw_candidates)} candidates...")
+                        log(f"      🔍 Pre-filtering {len(raw_candidates)} candidates...")
                         for candidate in raw_candidates:
-                            if candidate in seen or collected >= max_accounts or should_stop():
-                                continue
+                            if collected >= max_accounts or should_stop():
+                                break
                             passed = _pre_filter_profile(
                                 page, candidate, target_interest,
                                 optional_keywords, log,
@@ -380,6 +440,15 @@ def _scrape_hashtags_from_plan(
                                 all_usernames.append(candidate)
                                 collected += 1
                             _human_delay_sync("between_posts")
+
+                        # Restore the hashtag page so the next post link works
+                        log(f"  🔙 Returning to #{clean_tag} listing...")
+                        page.go_back()
+                        try:
+                            page.wait_for_selector('a[href*="/p/"]', timeout=8_000)
+                        except Exception:
+                            pass
+
                     elif raw_candidates:
                         # No target_interest — skip pre-filter, keep all
                         for candidate in raw_candidates:
@@ -471,7 +540,6 @@ def run_smart_lead_pipeline(
                 f"{len(hashtags)} hashtags, {len(queries)} queries, {len(seeds)} seeds"
             )
 
-            # Surface the plan to the caller (e.g. update task result)
             if on_plan_ready:
                 on_plan_ready(plan)
 
@@ -556,8 +624,6 @@ def run_smart_lead_pipeline(
                 log(f"\n🔬 SCRAPER AGENT STARTING (run #{stats['scraper_runs']})")
                 log(f"📌 {len(visited_posts)} posts already scraped")
 
-                # ── Core scraping: visit hashtag pages → open posts →
-                #    extract owners + commenters (same page) ──
                 new_usernames = _scrape_hashtags_from_plan(
                     page=page,
                     hashtags=hashtags,
@@ -581,11 +647,9 @@ def run_smart_lead_pipeline(
                     f"(total unique: {len(collected_usernames)})"
                 )
 
-                # Navigate back to feed after scraping
                 go_back_to_feed(page, log)
                 scraping_done = True
 
-                # A few natural scrolls to look human before qualification
                 log("📜 Resuming natural scrolling before qualification phase...")
                 for _ in range(random.randint(2, 4)):
                     if should_stop():
@@ -609,8 +673,8 @@ def run_smart_lead_pipeline(
         #  Keep going until max_profiles QUALIFIED leads are found
         #  or 100 profiles have been visited (safety cap).
         # ════════════════════════════════════════════════════════════
-        SAFETY_CAP = 100  # max profiles to visit before giving up
-        MAX_RESCRAPE_ROUNDS = 2  # extra scrape rounds if quota not met
+        SAFETY_CAP = 100
+        MAX_RESCRAPE_ROUNDS = 2
         rescrape_round = 0
         visit_index = 0
         log(
@@ -693,7 +757,6 @@ def run_smart_lead_pipeline(
                 log(f"{'=' * 40}")
 
                 try:
-                    # Search for the profile
                     if not perform_search(page, username, "username", log):
                         log(f"⚠️ Could not find @{username}, skipping...")
                         go_back_to_feed(page, log)
@@ -703,14 +766,11 @@ def run_smart_lead_pipeline(
                     stats["profiles_visited"] += 1
                     stats["total_scanned"] += 1
 
-                    # Scroll on the profile page (human-like)
                     num_scrolls = random.randint(3, 6)
                     log(f"📜 Scrolling {num_scrolls} times on profile...")
                     scroll_on_page(page, num_scrolls, should_stop, log)
 
-                    # Force a full page load to refresh meta tags
-                    # (Instagram SPA doesn't update og:* tags on
-                    #  client-side navigation, causing stale data)
+                    # Force full page load to refresh meta tags
                     log(f"🔄 Reloading @{username} profile for fresh data...")
                     page.goto(
                         f"https://www.instagram.com/{username}/",
@@ -725,13 +785,9 @@ def run_smart_lead_pipeline(
                         pass
                     _human_delay_sync("read_content")
 
-                    # Extract profile data
-                    profile_data = _extract_sync_profile_data(
-                        page, username, log
-                    )
+                    profile_data = _extract_sync_profile_data(page, username, log)
                     profile_data["discovery_source"] = "smart_pipeline"
 
-                    # Qualify with AI
                     log(f"🧠 Qualifying @{username}...")
                     scored = qualify_fn(profile_data)
 
@@ -746,28 +802,19 @@ def run_smart_lead_pipeline(
                             f"[{stats['total_qualified']}/{max_profiles}]"
                         )
 
-                        # Follow the account
-                        followed = scroll_to_top_and_follow(
-                            page, username, log
-                        )
+                        followed = scroll_to_top_and_follow(page, username, log)
                         if followed:
                             stats["profiles_followed"] += 1
                             log(f"➕ Followed @{username}!")
 
-                        # Check if we've hit our quota
                         if stats["total_qualified"] >= max_profiles:
                             log(f"🎉 Quota reached! {max_profiles} qualified leads found.")
                             break
                     else:
-                        score = (
-                            scored.get("total_score", 0) if scored else 0
-                        )
+                        score = scored.get("total_score", 0) if scored else 0
                         log(f"✗ @{username} not qualified (score={score})")
 
-                    # Return to home via navigation bar
                     go_back_to_feed(page, log)
-
-                    # Natural delay before resuming scrolling
                     time.sleep(random.uniform(3, 8))
 
                 except Exception as e:
