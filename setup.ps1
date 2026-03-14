@@ -1,4 +1,7 @@
+# Force execution policy for this session regardless of machine policy
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
 $ErrorActionPreference = "Continue"
+
 $APP_DIR  = "C:\IGAutomation"
 $BACKEND  = "$APP_DIR\backend"
 $FRONTEND = "$APP_DIR\frontend"
@@ -8,7 +11,7 @@ function Write-Log($msg, $color = "White") {
     $ts   = Get-Date -Format "HH:mm:ss"
     $line = "[$ts] $msg"
     Write-Host $line -ForegroundColor $color
-    Add-Content -Path $LOG -Value $line -ErrorAction SilentlyContinue
+    try { Add-Content -Path $LOG -Value $line -ErrorAction SilentlyContinue } catch {}
 }
 
 function Write-Step($msg) {
@@ -16,55 +19,139 @@ function Write-Step($msg) {
     Write-Log ">> $msg" "Cyan"
 }
 
-"" | Out-File -FilePath $LOG -Encoding utf8 -Force
+function Refresh-Path {
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" +
+                [System.Environment]::GetEnvironmentVariable("PATH","User")
+}
+
+# Create log file — handle case where dir is read-only
+try {
+    "" | Out-File -FilePath $LOG -Encoding utf8 -Force
+} catch {
+    $LOG = "$env:TEMP\ig-automation-setup.log"
+    "" | Out-File -FilePath $LOG -Encoding utf8 -Force
+}
 
 Write-Log "================================================" "Magenta"
 Write-Log "  IG Automation - Setup" "Magenta"
 Write-Log "================================================"
 Write-Log "APP_DIR  = $APP_DIR"
 Write-Log "Log file = $LOG"
+Write-Log "User     = $env:USERNAME"
+Write-Log "OS       = $([System.Environment]::OSVersion.VersionString)"
+
+# Ensure execution policy is set machine-wide for future runs
+try {
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction SilentlyContinue
+    Write-Log "[OK] Execution policy set." "Green"
+} catch {
+    Write-Log "[INFO] Could not set machine execution policy (may need admin). Continuing..." "Yellow"
+}
 
 # VERIFY INSTALL
 if (-not (Test-Path $APP_DIR)) {
     Write-Log "[ERROR] $APP_DIR not found. Please reinstall." "Red"
-    exit 1
+    Read-Host "Press Enter to exit"; exit 1
 }
 if (-not (Test-Path "$BACKEND\backend.exe")) {
     Write-Log "[ERROR] backend.exe missing. Please reinstall." "Red"
-    exit 1
+    Read-Host "Press Enter to exit"; exit 1
 }
 if (-not (Test-Path "$FRONTEND\.next")) {
     Write-Log "[ERROR] Frontend .next folder missing. Please reinstall." "Red"
-    exit 1
+    Read-Host "Press Enter to exit"; exit 1
 }
 Write-Log "[OK] Install verified." "Green"
 
 # STEP 1: NODE.JS
 Write-Step "[Step 1/3] Checking Node.js..."
+
+# Refresh PATH first in case Node was just installed
+Refresh-Path
+
 $hasNode = $null
 try { $hasNode = & node --version 2>&1 } catch {}
 
+# Also check common install paths directly
 if (-not $hasNode -or $hasNode -notmatch "v\d") {
-    Write-Log "   Node.js not found. Downloading..." "Yellow"
+    foreach ($nodePath in @(
+        "$env:PROGRAMFILES\nodejs\node.exe",
+        "$env:ProgramFiles(x86)\nodejs\node.exe",
+        "$env:APPDATA\npm\node.exe",
+        "$env:LOCALAPPDATA\Programs\nodejs\node.exe"
+    )) {
+        if (Test-Path $nodePath) {
+            $env:PATH = "$env:PATH;$(Split-Path $nodePath)"
+            try { $hasNode = & node --version 2>&1 } catch {}
+            if ($hasNode -match "v\d") { break }
+        }
+    }
+}
+
+if (-not $hasNode -or $hasNode -notmatch "v\d") {
+    Write-Log "   Node.js not found. Downloading (this may take a few minutes)..." "Yellow"
     $nodeInstaller = "$env:TEMP\node-lts-x64.msi"
     $nodeUrl       = "https://nodejs.org/dist/v20.19.0/node-v20.19.0-x64.msi"
 
-    & curl.exe -L --silent --show-error --output $nodeInstaller $nodeUrl
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $nodeInstaller) -or (Get-Item $nodeInstaller).Length -lt 1000000) {
-        Write-Log "[ERROR] Failed to download Node.js." "Red"
-        Write-Log "   Install manually from https://nodejs.org then re-run setup." "Red"
-        exit 1
+    # Try curl.exe first (built into Windows 10/11)
+    $downloaded = $false
+    try {
+        & curl.exe -L --silent --show-error --output $nodeInstaller $nodeUrl
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $nodeInstaller) -and (Get-Item $nodeInstaller).Length -gt 1000000) {
+            $downloaded = $true
+        }
+    } catch {}
+
+    # Fallback to WebClient if curl fails
+    if (-not $downloaded) {
+        try {
+            Write-Log "   Trying WebClient download..." "Yellow"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            (New-Object Net.WebClient).DownloadFile($nodeUrl, $nodeInstaller)
+            if ((Test-Path $nodeInstaller) -and (Get-Item $nodeInstaller).Length -gt 1000000) {
+                $downloaded = $true
+            }
+        } catch { Write-Log "   WebClient failed: $($_.Exception.Message)" "Yellow" }
     }
 
-    $proc = Start-Process "msiexec.exe" -ArgumentList "/i `"$nodeInstaller`" /quiet /norestart" -Wait -PassThru
-    Remove-Item $nodeInstaller -ErrorAction SilentlyContinue
-    if ($proc.ExitCode -ne 0) {
-        Write-Log "[ERROR] Node.js install failed (exit $($proc.ExitCode))" "Red"
-        exit 1
+    if (-not $downloaded) {
+        Write-Log "[ERROR] Could not download Node.js." "Red"
+        Write-Log "   Please install Node.js manually from https://nodejs.org" "Red"
+        Write-Log "   Then re-run: $APP_DIR\run-setup.bat" "Red"
+        Read-Host "Press Enter to exit"; exit 1
     }
-    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
+
+    Write-Log "   Installing Node.js silently..." "Yellow"
+    $proc = Start-Process "msiexec.exe" -ArgumentList "/i `"$nodeInstaller`" /quiet /norestart ADDLOCAL=ALL" -Wait -PassThru
+    Remove-Item $nodeInstaller -ErrorAction SilentlyContinue
+
+    if ($proc.ExitCode -notin @(0, 1641, 3010)) {
+        Write-Log "[ERROR] Node.js install failed (exit $($proc.ExitCode))" "Red"
+        Read-Host "Press Enter to exit"; exit 1
+    }
+
+    Refresh-Path
+    # Give installer a moment to settle
+    Start-Sleep -Seconds 3
+
+    # Re-check after install
+    foreach ($nodePath in @(
+        "$env:PROGRAMFILES\nodejs\node.exe",
+        "$env:ProgramFiles(x86)\nodejs\node.exe"
+    )) {
+        if (Test-Path $nodePath) {
+            $env:PATH = "$env:PATH;$(Split-Path $nodePath)"
+        }
+    }
+    try { $hasNode = & node --version 2>&1 } catch {}
 }
-Write-Log "[OK] Node: $(& node --version 2>&1)" "Green"
+
+if (-not $hasNode -or $hasNode -notmatch "v\d") {
+    Write-Log "[ERROR] Node.js not found after install." "Red"
+    Write-Log "   Please restart your computer and run $APP_DIR\run-setup.bat again." "Red"
+    Read-Host "Press Enter to exit"; exit 1
+}
+Write-Log "[OK] Node: $hasNode" "Green"
 
 # STEP 2: FRONTEND npm install
 Write-Step "[Step 2/3] Installing frontend runtime packages..."
@@ -102,15 +189,19 @@ module.exports = {};
 
 $nextCfg = "$FRONTEND\next.config.js"
 if (Test-Path $nextCfg) {
-    $content = Get-Content $nextCfg -Raw
-    if ($content -notmatch "load-env") {
-        [System.IO.File]::WriteAllText($nextCfg, "require('./load-env');`n" + $content, $utf8NoBOM)
+    $cfgContent = Get-Content $nextCfg -Raw
+    if ($cfgContent -notmatch "load-env") {
+        [System.IO.File]::WriteAllText($nextCfg, "require('./load-env');`n" + $cfgContent, $utf8NoBOM)
         Write-Log "   Patched next.config.js"
     }
 }
 
 Write-Log "   Running npm install..."
 & npm install --omit=dev --silent
+if ($LASTEXITCODE -ne 0) {
+    Write-Log "[WARN] npm install had warnings. Retrying without --omit=dev..." "Yellow"
+    & npm install --silent
+}
 Write-Log "[OK] Frontend packages installed." "Green"
 
 # STEP 3: PLAYWRIGHT CHROMIUM
@@ -126,7 +217,6 @@ if (Test-Path "$FRONTEND\node_modules\.bin\playwright.cmd") {
 }
 
 Write-Log "   Downloading Chromium browser..."
-$chromiumOk = $false
 try {
     if ($playwrightCmd) {
         & $playwrightCmd install chromium
@@ -134,7 +224,6 @@ try {
         & npx playwright install chromium
     }
     if ($LASTEXITCODE -eq 0) {
-        $chromiumOk = $true
         Write-Log "[OK] Playwright Chromium installed." "Green"
     } else {
         Write-Log "[WARN] Chromium download failed - will retry on first launch." "Yellow"
@@ -143,7 +232,7 @@ try {
     Write-Log "[WARN] Playwright install skipped: $($_.Exception.Message)" "Yellow"
 }
 
-# CREATE LAUNCHER
+# CREATE SILENT LAUNCHER (VBScript - no terminal windows)
 Write-Step "Creating launcher and Desktop shortcut..."
 
 $launchVbs = @"
@@ -160,7 +249,7 @@ sh.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -aon ^| findstr "":3000 "" ^|
 sh.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -aon ^| findstr "":8000 "" ^| findstr ""LISTENING""') do taskkill /F /PID %a 2>nul", 0, True
 WScript.Sleep 1000
 
-' Start backend silently (0 = hidden window)
+' Start backend silently
 sh.Run "cmd /c cd /d """ & BACKEND & """ && set PLAYWRIGHT_BROWSERS_PATH=" & BACKEND & "\.playwright-browsers && backend.exe", 0, False
 
 ' Start frontend silently
@@ -190,8 +279,6 @@ sh.Run "http://localhost:3000"
 "@
 [System.IO.File]::WriteAllText("$APP_DIR\start.vbs", $launchVbs, [System.Text.UTF8Encoding]::new($false))
 Write-Log "   start.vbs written."
-[System.IO.File]::WriteAllText("$APP_DIR\start.bat", $startBat, [System.Text.ASCIIEncoding]::new())
-Write-Log "   start.bat written."
 
 # SHORTCUT
 $loggedInUser = $null
