@@ -146,52 +146,50 @@ try {
 # CREATE LAUNCHER
 Write-Step "Creating launcher and Desktop shortcut..."
 
-$startBat = @"
-@echo off
-title IG Automation
-set APP_DIR=C:\IGAutomation
-set BACKEND=%APP_DIR%\backend
-set FRONTEND=%APP_DIR%\frontend
-set PLAYWRIGHT_BROWSERS_PATH=%BACKEND%\.playwright-browsers
-set PATH=%PATH%;%APPDATA%\npm;%PROGRAMFILES%\nodejs
+$launchVbs = @"
+Dim sh, result
+Set sh = CreateObject("WScript.Shell")
 
-echo Stopping any existing instances...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000 " ^| findstr "LISTENING"') do taskkill /F /PID %%a 2>nul
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 " ^| findstr "LISTENING"') do taskkill /F /PID %%a 2>nul
-timeout /t 1 /nobreak >nul
+Dim APP_DIR, BACKEND, FRONTEND
+APP_DIR  = "C:\IGAutomation"
+BACKEND  = APP_DIR & "\backend"
+FRONTEND = APP_DIR & "\frontend"
 
-echo Starting backend...
-start "IG Backend" cmd /k "cd /d ""%BACKEND%"" && backend.exe"
+' Kill any existing instances silently
+sh.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -aon ^| findstr "":3000 "" ^| findstr ""LISTENING""') do taskkill /F /PID %a 2>nul", 0, True
+sh.Run "cmd /c for /f ""tokens=5"" %a in ('netstat -aon ^| findstr "":8000 "" ^| findstr ""LISTENING""') do taskkill /F /PID %a 2>nul", 0, True
+WScript.Sleep 1000
 
-echo Starting frontend...
-start "IG Frontend" cmd /k "cd /d ""%FRONTEND%"" && npm start"
+' Start backend silently (0 = hidden window)
+sh.Run "cmd /c cd /d """ & BACKEND & """ && set PLAYWRIGHT_BROWSERS_PATH=" & BACKEND & "\.playwright-browsers && backend.exe", 0, False
 
-echo Waiting for backend on port 8000...
-:wait_backend
-timeout /t 2 /nobreak >nul
-netstat -an | findstr ":8000 " | findstr "LISTENING" >nul 2>&1
-if errorlevel 1 goto wait_backend
-echo [OK] Backend ready.
+' Start frontend silently
+sh.Run "cmd /c cd /d """ & FRONTEND & """ && npm start", 0, False
 
-echo Waiting for frontend on port 3000...
-:wait_frontend
-timeout /t 2 /nobreak >nul
-netstat -an | findstr ":3000 " | findstr "LISTENING" >nul 2>&1
-if errorlevel 1 goto wait_frontend
-echo [OK] Frontend ready.
+' Wait for backend port 8000
+Dim attempts
+attempts = 0
+Do
+    WScript.Sleep 2000
+    result = sh.Run("cmd /c netstat -an | findstr "":8000 "" | findstr ""LISTENING"" >nul 2>&1", 0, True)
+    attempts = attempts + 1
+    If attempts > 30 Then Exit Do
+Loop While result <> 0
 
-start "" "http://localhost:3000"
+' Wait for frontend port 3000
+attempts = 0
+Do
+    WScript.Sleep 2000
+    result = sh.Run("cmd /c netstat -an | findstr "":3000 "" | findstr ""LISTENING"" >nul 2>&1", 0, True)
+    attempts = attempts + 1
+    If attempts > 30 Then Exit Do
+Loop While result <> 0
 
-echo.
-echo ================================================
-echo   IG Automation is running!
-echo   Backend  : http://localhost:8000
-echo   Frontend : http://localhost:3000
-echo   Close the Backend and Frontend windows to stop.
-echo ================================================
-echo.
-exit
+' Open browser
+sh.Run "http://localhost:3000"
 "@
+[System.IO.File]::WriteAllText("$APP_DIR\start.vbs", $launchVbs, [System.Text.UTF8Encoding]::new($false))
+Write-Log "   start.vbs written."
 [System.IO.File]::WriteAllText("$APP_DIR\start.bat", $startBat, [System.Text.ASCIIEncoding]::new())
 Write-Log "   start.bat written."
 
@@ -226,7 +224,8 @@ foreach ($dp in ($desktopPaths | Select-Object -Unique)) {
         try {
             $shell    = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut("$dp\IG Automation.lnk")
-            $shortcut.TargetPath       = "$APP_DIR\start.bat"
+            $shortcut.TargetPath       = "C:\Windows\System32\wscript.exe"
+            $shortcut.Arguments        = "`"$APP_DIR\start.vbs`""
             $shortcut.WorkingDirectory = $APP_DIR
             $shortcut.WindowStyle      = 1
             $shortcut.Description      = "IG Automation"
