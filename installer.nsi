@@ -24,7 +24,7 @@ ShowInstDetails show
 !insertmacro MUI_PAGE_INSTFILES
 
 !define MUI_FINISHPAGE_TITLE "Installation Complete"
-!define MUI_FINISHPAGE_TEXT "IG Automation has been installed.$\r$\n$\r$\nClick Finish to complete setup.$\r$\nA terminal window will open briefly to finish configuration.$\r$\n$\r$\nWhen done, a shortcut will appear on your Desktop."
+!define MUI_FINISHPAGE_TEXT "IG Automation has been installed.$\r$\n$\r$\nClick Finish to complete setup.$\r$\nThis will take a few minutes.$\r$\n$\r$\nWhen done, a shortcut will appear on your Desktop."
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Complete setup now (recommended)"
 !define MUI_FINISHPAGE_RUN_FUNCTION RunSetup
@@ -35,12 +35,12 @@ ShowInstDetails show
 !insertmacro MUI_LANGUAGE "English"
 
 Section "Install" SecMain
-    ; Install backend — compiled exe only, no Python source
+    ; Install backend
     SetOutPath "${APP_DIR}\backend"
     File "payload\backend\backend.exe"
     File "payload\backend\.env.enc"
 
-    ; Install frontend — .next build only, no source files
+    ; Install frontend
     SetOutPath "${APP_DIR}\frontend"
     File /r "payload\frontend\.next"
     File "payload\frontend\package.json"
@@ -52,18 +52,19 @@ Section "Install" SecMain
     File "setup.ps1"
     File "AppIcon.ico"
 
-    ; Write run-setup.bat using absolute PowerShell path
+    ; Set PowerShell execution policy for all users so scripts can run
+    ; This is the main blocker on fresh/locked-down machines
+    ExecWait '$WINDIR\system32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force"'
+
+    ; Write run-setup.bat using absolute PowerShell path + Bypass flag
     FileOpen $0 "$INSTDIR\run-setup.bat" w
     FileWrite $0 "@echo off$\r$\n"
     FileWrite $0 "title IG Automation Setup$\r$\n"
-    FileWrite $0 "set PS=$\r$\n"
-    FileWrite $0 "if exist $\"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe$\" $\r$\n"
-    FileWrite $0 "    set PS=$\"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe$\"$\r$\n"
-    FileWrite $0 "if not defined PS $\r$\n"
-    FileWrite $0 "    if exist $\"%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe$\" $\r$\n"
-    FileWrite $0 "        set PS=$\"%SystemRoot%\SysWOW64\WindowsPowerShell\v1.0\powershell.exe$\"$\r$\n"
-    FileWrite $0 "if not defined PS ($\r$\n"
+    FileWrite $0 "set PS=$WINDIR\system32\WindowsPowerShell\v1.0\powershell.exe$\r$\n"
+    FileWrite $0 "if not exist $\"%PS%$\" set PS=$WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe$\r$\n"
+    FileWrite $0 "if not exist $\"%PS%$\" ($\r$\n"
     FileWrite $0 "    echo [ERROR] PowerShell not found.$\r$\n"
+    FileWrite $0 "    echo Please install from https://aka.ms/powershell$\r$\n"
     FileWrite $0 "    pause$\r$\n"
     FileWrite $0 "    exit /b 1$\r$\n"
     FileWrite $0 ")$\r$\n"
@@ -71,6 +72,7 @@ Section "Install" SecMain
     FileWrite $0 "if errorlevel 1 ($\r$\n"
     FileWrite $0 "    echo.$\r$\n"
     FileWrite $0 "    echo [FAILED] Check log: $INSTDIR\setup-log.txt$\r$\n"
+    FileWrite $0 "    pause$\r$\n"
     FileWrite $0 ") else ($\r$\n"
     FileWrite $0 "    echo.$\r$\n"
     FileWrite $0 "    echo [DONE] Setup complete! Close this window.$\r$\n"
