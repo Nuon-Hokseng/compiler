@@ -219,12 +219,12 @@ def _pre_filter_profile(
     """
     Quick profile visit to decide if a commenter is worth qualifying.
 
-    Returns **True** to KEEP the profile (premium candidate).
-    Skips (returns False) only when **ALL** of these are true:
-      - Bio is empty or very short (< 20 chars)
-      - No niche keywords found in bio / recent captions
-      - No work / lifestyle signals detected
-      - Low followers (< 100) or weak activity
+        Returns **True** to KEEP the profile (premium candidate).
+
+        The pre-filter is intentionally conservative: it should only reject
+        profiles when signals are broadly weak across follower, niche, bio,
+        and lifestyle checks. This avoids dropping niche-fit users just
+        because one field is sparse.
 
     NOTE: This function navigates the page to the profile URL.
     Callers must handle restoring page state after this returns
@@ -246,48 +246,84 @@ def _pre_filter_profile(
         data = _extract_sync_profile_data(page, username, log)
 
         bio = data.get("bio", "").strip()
+        full_name = (data.get("full_name") or "").strip()
         followers = data.get("followers_count", 0)
         captions = data.get("recent_captions", [])
 
         # ── Build niche keywords from the user's target interest ──
         niche_keywords: set[str] = set()
-        for word in target_interest.lower().split():
-            if len(word) > 2:
-                niche_keywords.add(word)
-        if optional_keywords:
-            for kw in optional_keywords:
-                for word in kw.lower().split():
+
+        def _add_keywords(source: str):
+            # Keep non-Latin tokens with length >= 2, and Latin tokens > 2.
+            for token in re.split(r"[\s,/#|:;()\[\]{}+_-]+", source.lower()):
+                word = token.strip()
+                if not word:
+                    continue
+                if re.search(r"[a-z]", word):
                     if len(word) > 2:
                         niche_keywords.add(word)
+                elif len(word) >= 2:
+                    niche_keywords.add(word)
 
-        # FIX Bug 3 (belt-and-suspenders): all_text is lowercased and
-        # signals are already lowercased — comparison is always safe.
-        all_text = (bio + " " + " ".join(captions)).lower()
+        _add_keywords(target_interest)
+        if optional_keywords:
+            for kw in optional_keywords:
+                _add_keywords(kw)
 
-        # ── Four criteria ──
-        bio_empty = len(bio) < 20
-        no_niche = not any(kw in all_text for kw in niche_keywords)
-        no_signals = not any(sig in all_text for sig in WORK_LIFESTYLE_SIGNALS)
-        low_followers = followers < 100
+        # Combine all available profile text so signals don't depend only on bio.
+        combined_text = " ".join([
+            username,
+            full_name,
+            bio,
+            " ".join(captions),
+        ]).lower()
 
-        # Skip ONLY when ALL four hold
-        if bio_empty and no_niche and no_signals and low_followers:
+        niche_hit = any(kw in combined_text for kw in niche_keywords)
+        lifestyle_hit = any(sig in combined_text for sig in WORK_LIFESTYLE_SIGNALS)
+
+        # Bio check: treat >= 8 non-whitespace chars as meaningful.
+        bio_chars = len(re.sub(r"\s+", "", bio))
+        bio_substantive = bio_chars >= 8
+
+        # Follower tiers. Very low is only used for hard reject.
+        followers_very_low = followers < 40
+        followers_low = followers < 120
+
+        # Keep quickly when we have at least one strong positive combination.
+        if niche_hit:
+            log(f"      ✅ @{username} pre-filter PASSED (niche match)")
+            return True
+        if lifestyle_hit and not followers_very_low:
+            log(f"      ✅ @{username} pre-filter PASSED (lifestyle signal + followers={followers})")
+            return True
+        if bio_substantive and not followers_low:
+            log(f"      ✅ @{username} pre-filter PASSED (substantive bio + followers={followers})")
+            return True
+
+        # Reject only when all channels are weak at the same time.
+        if (not bio_substantive) and (not niche_hit) and (not lifestyle_hit) and followers_very_low:
             log(
                 f"      ❌ @{username} filtered out: "
-                f"empty bio, no niche match, no work signals, "
-                f"low followers ({followers})"
+                f"weak bio, no niche match, no lifestyle signals, "
+                f"very low followers ({followers})"
             )
             return False
 
         reasons: list[str] = []
-        if not bio_empty:
+        if bio_substantive:
             reasons.append("bio")
-        if not no_niche:
+        if niche_hit:
             reasons.append("niche match")
-        if not no_signals:
-            reasons.append("work signals")
-        if not low_followers:
+        if lifestyle_hit:
+            reasons.append("lifestyle signals")
+        if not followers_low:
             reasons.append(f"{followers} followers")
+        elif followers > 0:
+            reasons.append(f"{followers} followers (low)")
+
+        if not reasons:
+            reasons.append("uncertain but not hard-reject")
+
         log(f"      ✅ @{username} pre-filter PASSED ({', '.join(reasons)})")
         return True
 
@@ -669,74 +705,107 @@ def run_smart_lead_pipeline(
             )
 
         # ════════════════════════════════════════════════════════════
-        #  Phase 3 — Scroll normally + visit profiles on 30 % chance
-        #  Keep going until max_profiles QUALIFIED leads are found
-        #  or 100 profiles have been visited (safety cap).
+        #  Phase 3 — Infinite qualification mode.
+        #  Keep cycling scrape + qualify until `max_profiles` qualified
+        #  leads are reached or the user stops the task.
+        #  If progress is dry for too long, enter "rest mode" and just
+        #  scroll feed normally before the next scrape cycle.
         # ════════════════════════════════════════════════════════════
-        SAFETY_CAP = 100
-        MAX_RESCRAPE_ROUNDS = 2
-        rescrape_round = 0
         visit_index = 0
+        stagnant_scrape_rounds = 0
+        last_qualification_ts = time.time()
+
+        REST_IDLE_SECONDS = 12 * 60
+        REST_SCROLLS_MIN = 8
+        REST_SCROLLS_MAX = 16
+        RESCRAPE_BATCH_MIN = 60
+
+        stats.setdefault("rest_cycles", 0)
+
+        def _run_rest_mode(reason: str):
+            rest_scrolls = random.randint(REST_SCROLLS_MIN, REST_SCROLLS_MAX)
+            stats["rest_cycles"] += 1
+            log(
+                f"😴 Rest mode #{stats['rest_cycles']} ({reason}) — "
+                f"scrolling feed naturally x{rest_scrolls}"
+            )
+            go_back_to_feed(page, log)
+            for _ in range(rest_scrolls):
+                if should_stop() or stats["total_qualified"] >= max_profiles:
+                    break
+                do_single_scroll(page, log)
+                stats["scrolls"] += 1
+                if try_random_like(page, log=log):
+                    stats["likes"] += 1
+                time.sleep(random.uniform(1.0, 2.5))
+
         log(
-            f"\n🎯 Phase 3: Qualification loop — need {max_profiles} qualified leads "
-            f"(30% chance per scroll, safety cap={SAFETY_CAP})"
+            f"\n🎯 Phase 3: Infinite qualification loop — target {max_profiles} qualified leads "
+            f"(runs until quota reached or manually stopped)"
         )
 
-        while (
-            stats["total_qualified"] < max_profiles
-            and stats["profiles_visited"] < SAFETY_CAP
-            and not should_stop()
-        ):
-            # ── If we've exhausted collected usernames, try re-scraping ──
+        while stats["total_qualified"] < max_profiles and not should_stop():
+            # ── If candidates exhausted, keep re-scraping indefinitely ──
             if visit_index >= len(collected_usernames):
-                if rescrape_round < MAX_RESCRAPE_ROUNDS and plan_holder.get("plan"):
-                    rescrape_round += 1
-                    plan = plan_holder["plan"]
-                    hashtags = plan.get("hashtags", [])
-                    if hashtags:
-                        log(
-                            f"\n🔄 Re-scrape round {rescrape_round}/{MAX_RESCRAPE_ROUNDS} "
-                            f"— need {max_profiles - stats['total_qualified']} more qualified leads"
-                        )
-                        go_back_to_feed(page, log)
-                        new_usernames = _scrape_hashtags_from_plan(
-                            page=page,
-                            hashtags=hashtags,
-                            should_stop=should_stop,
-                            log=log,
-                            visited_posts=visited_posts,
-                            max_accounts=max_profiles * 3,
-                            target_interest=target_interest,
-                            optional_keywords=optional_keywords,
-                        )
-                        existing_set = set(collected_usernames)
-                        for uname in new_usernames:
-                            if uname not in existing_set:
-                                collected_usernames.append(uname)
-                                existing_set.add(uname)
-                        go_back_to_feed(page, log)
-                        log(f"📊 Re-scrape added {len(new_usernames)} usernames (total: {len(collected_usernames)})")
-                        if visit_index >= len(collected_usernames):
-                            log("⚠️ No new usernames found. Stopping.")
-                            break
-                        continue
-                    else:
-                        log("⚠️ No hashtags available for re-scrape. Stopping.")
-                        break
-                else:
-                    log(
-                        f"⚠️ All {len(collected_usernames)} usernames exhausted "
-                        f"after {rescrape_round} re-scrape rounds. Stopping."
-                    )
-                    break
+                plan = plan_holder.get("plan") or {}
+                hashtags = plan.get("hashtags", [])
 
-            # ── Normal feed scroll ──
+                if not hashtags:
+                    log("⚠️ Discovery plan has no hashtags. Entering feed rest mode before retry...")
+                    _run_rest_mode("missing hashtags")
+                    continue
+
+                stats["scraper_runs"] += 1
+                remaining = max_profiles - stats["total_qualified"]
+                batch_size = max(remaining * 3, RESCRAPE_BATCH_MIN)
+                log(
+                    f"\n🔄 Re-scrape run #{stats['scraper_runs']} "
+                    f"— need {remaining} more qualified leads (batch={batch_size})"
+                )
+
+                go_back_to_feed(page, log)
+                new_usernames = _scrape_hashtags_from_plan(
+                    page=page,
+                    hashtags=hashtags,
+                    should_stop=should_stop,
+                    log=log,
+                    visited_posts=visited_posts,
+                    max_accounts=batch_size,
+                    target_interest=target_interest,
+                    optional_keywords=optional_keywords,
+                )
+
+                existing_set = set(collected_usernames)
+                before_total = len(collected_usernames)
+                for uname in new_usernames:
+                    if uname not in existing_set:
+                        collected_usernames.append(uname)
+                        existing_set.add(uname)
+                added = len(collected_usernames) - before_total
+
+                go_back_to_feed(page, log)
+                log(f"📊 Re-scrape added {added} new usernames (pool: {len(collected_usernames)})")
+
+                if added == 0:
+                    stagnant_scrape_rounds += 1
+                    if stagnant_scrape_rounds >= 3:
+                        # Allow revisiting old post URLs after long drought.
+                        visited_posts.clear()
+                        stagnant_scrape_rounds = 0
+                        log("♻️ Reset visited post cache after repeated dry scrapes.")
+                    _run_rest_mode("no new candidates found")
+                    continue
+
+                stagnant_scrape_rounds = 0
+                continue
+
+            # ── Regular feed behavior between profile visits ──
             stats["scrolls"] += 1
             remaining_quota = max_profiles - stats["total_qualified"]
             log(
                 f"📜 Scroll #{stats['scrolls']} | "
                 f"❤️ {stats['likes']} | "
-                f"👤 {stats['profiles_visited']}/{SAFETY_CAP} visited | "
+                f"👤 {stats['profiles_visited']} visited | "
                 f"✅ {stats['total_qualified']}/{max_profiles} qualified | "
                 f"🎯 {remaining_quota} more needed"
             )
@@ -745,84 +814,92 @@ def run_smart_lead_pipeline(
             if try_random_like(page, log=log):
                 stats["likes"] += 1
 
-            # ── 30 % chance to visit the next profile ──
-            if random.random() < 0.30:
-                username = collected_usernames[visit_index]
-                visit_index += 1
+            # Long dry period -> cool down with natural feed scrolling.
+            idle_seconds = time.time() - last_qualification_ts
+            if idle_seconds >= REST_IDLE_SECONDS:
+                _run_rest_mode(f"{int(idle_seconds // 60)} min without new qualified leads")
+                last_qualification_ts = time.time()
+                continue
 
-                log(f"\n{'=' * 40}")
-                log(
-                    f"👤 [{stats['profiles_visited'] + 1}/{SAFETY_CAP}] Visiting @{username}"
-                )
-                log(f"{'=' * 40}")
+            # 30 % chance to visit the next profile
+            if random.random() >= 0.30:
+                continue
 
-                try:
-                    if not perform_search(page, username, "username", log):
-                        log(f"⚠️ Could not find @{username}, skipping...")
-                        go_back_to_feed(page, log)
-                        continue
+            username = collected_usernames[visit_index]
+            visit_index += 1
 
-                    time.sleep(random.uniform(2.5, 4.0))
-                    stats["profiles_visited"] += 1
-                    stats["total_scanned"] += 1
+            log(f"\n{'=' * 40}")
+            log(f"👤 Visiting @{username} ({stats['profiles_visited'] + 1} visited total)")
+            log(f"{'=' * 40}")
 
-                    num_scrolls = random.randint(3, 6)
-                    log(f"📜 Scrolling {num_scrolls} times on profile...")
-                    scroll_on_page(page, num_scrolls, should_stop, log)
-
-                    # Force full page load to refresh meta tags
-                    log(f"🔄 Reloading @{username} profile for fresh data...")
-                    page.goto(
-                        f"https://www.instagram.com/{username}/",
-                        wait_until="domcontentloaded",
-                    )
-                    try:
-                        page.wait_for_selector(
-                            'meta[property="og:description"]',
-                            timeout=8_000,
-                        )
-                    except Exception:
-                        pass
-                    _human_delay_sync("read_content")
-
-                    profile_data = _extract_sync_profile_data(page, username, log)
-                    profile_data["discovery_source"] = "smart_pipeline"
-
-                    log(f"🧠 Qualifying @{username}...")
-                    scored = qualify_fn(profile_data)
-
-                    if scored and scored.get("is_target"):
-                        stats["total_qualified"] += 1
-                        qualified_leads.append(scored)
-
-                        log(
-                            f"✅ @{username} QUALIFIED! "
-                            f"(score={scored.get('total_score', 0)}, "
-                            f"confidence={scored.get('confidence', '?')}) "
-                            f"[{stats['total_qualified']}/{max_profiles}]"
-                        )
-
-                        followed = scroll_to_top_and_follow(page, username, log)
-                        if followed:
-                            stats["profiles_followed"] += 1
-                            log(f"➕ Followed @{username}!")
-
-                        if stats["total_qualified"] >= max_profiles:
-                            log(f"🎉 Quota reached! {max_profiles} qualified leads found.")
-                            break
-                    else:
-                        score = scored.get("total_score", 0) if scored else 0
-                        log(f"✗ @{username} not qualified (score={score})")
-
+            try:
+                if not perform_search(page, username, "username", log):
+                    log(f"⚠️ Could not find @{username}, skipping...")
                     go_back_to_feed(page, log)
-                    time.sleep(random.uniform(3, 8))
+                    continue
 
-                except Exception as e:
-                    log(f"❌ Error with @{username}: {e}")
-                    try:
-                        go_back_to_feed(page, log)
-                    except Exception:
-                        pass
+                time.sleep(random.uniform(2.5, 4.0))
+                stats["profiles_visited"] += 1
+                stats["total_scanned"] += 1
+
+                num_scrolls = random.randint(3, 6)
+                log(f"📜 Scrolling {num_scrolls} times on profile...")
+                scroll_on_page(page, num_scrolls, should_stop, log)
+
+                # Force full page load to refresh meta tags
+                log(f"🔄 Reloading @{username} profile for fresh data...")
+                page.goto(
+                    f"https://www.instagram.com/{username}/",
+                    wait_until="domcontentloaded",
+                )
+                try:
+                    page.wait_for_selector(
+                        'meta[property="og:description"]',
+                        timeout=8_000,
+                    )
+                except Exception:
+                    pass
+                _human_delay_sync("read_content")
+
+                profile_data = _extract_sync_profile_data(page, username, log)
+                profile_data["discovery_source"] = "smart_pipeline"
+
+                log(f"🧠 Qualifying @{username}...")
+                scored = qualify_fn(profile_data)
+
+                if scored and scored.get("is_target"):
+                    stats["total_qualified"] += 1
+                    qualified_leads.append(scored)
+                    last_qualification_ts = time.time()
+
+                    log(
+                        f"✅ @{username} QUALIFIED! "
+                        f"(score={scored.get('total_score', 0)}, "
+                        f"confidence={scored.get('confidence', '?')}) "
+                        f"[{stats['total_qualified']}/{max_profiles}]"
+                    )
+
+                    followed = scroll_to_top_and_follow(page, username, log)
+                    if followed:
+                        stats["profiles_followed"] += 1
+                        log(f"➕ Followed @{username}!")
+
+                    if stats["total_qualified"] >= max_profiles:
+                        log(f"🎉 Quota reached! {max_profiles} qualified leads found.")
+                        break
+                else:
+                    score = scored.get("total_score", 0) if scored else 0
+                    log(f"✗ @{username} not qualified (score={score})")
+
+                go_back_to_feed(page, log)
+                time.sleep(random.uniform(3, 8))
+
+            except Exception as e:
+                log(f"❌ Error with @{username}: {e}")
+                try:
+                    go_back_to_feed(page, log)
+                except Exception:
+                    pass
 
         # ── Summary ──
         log(f"\n{'=' * 50}")
