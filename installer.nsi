@@ -52,9 +52,10 @@ Section "Install" SecMain
     File "setup.ps1"
     File "AppIcon.ico"
 
-    ; Set PowerShell execution policy for all users so scripts can run
-    ; This is the main blocker on fresh/locked-down machines
-    ExecWait '$WINDIR\system32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NoProfile -Command "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force"'
+    ; Set PowerShell execution policy silently — no window flash
+    DetailPrint "Configuring system settings..."
+    ExecWait '$WINDIR\system32\WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Set-ExecutionPolicy RemoteSigned -Scope LocalMachine -Force"'
+    DetailPrint "System settings configured."
 
     ; Write run-setup.bat using absolute PowerShell path + Bypass flag
     FileOpen $0 "$INSTDIR\run-setup.bat" w
