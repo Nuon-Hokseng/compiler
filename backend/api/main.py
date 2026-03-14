@@ -94,6 +94,52 @@ async def get_all_tasks():
     return list_all_tasks()
 
 
+@app.get("/api/jobs", tags=["Tasks"])
+async def get_legacy_jobs():
+    """Legacy compatibility endpoint used by older frontend polling."""
+    status_map = {
+        TaskStatus.PENDING: "queued",
+        TaskStatus.RUNNING: "running",
+        TaskStatus.COMPLETED: "completed",
+        TaskStatus.FAILED: "failed",
+        TaskStatus.STOPPED: "failed",
+    }
+
+    jobs = []
+    for task in list_all_tasks():
+        task_result = task.result or {}
+        msg = task.message or ""
+        logs = task.logs or []
+
+        # Best-effort extraction for legacy UI fields.
+        target = ""
+        if "\u2013" in msg:
+            target = msg.split("\u2013", 1)[1].strip()
+        elif "-" in msg:
+            target = msg.split("-", 1)[1].strip()
+
+        accounts = task_result.get("accounts") if isinstance(task_result, dict) else None
+        total_scraped = len(accounts) if isinstance(accounts, list) else 0
+        csv_path = task_result.get("csv_path") if isinstance(task_result, dict) else None
+
+        jobs.append({
+            "job_id": task.task_id,
+            "status": status_map.get(task.status, "queued"),
+            "progress": logs[-1] if logs else msg,
+            "target_customer": target,
+            "error": msg if task.status in (TaskStatus.FAILED, TaskStatus.STOPPED) else None,
+            "summary": {
+                "total_scraped": total_scraped,
+                "owners": 0,
+                "commenters": 0,
+                "filtered": 0,
+                "csv_path": csv_path,
+            },
+        })
+
+    return jobs
+
+
 @app.get("/tasks/{task_id}", response_model=TaskInfo, tags=["Tasks"])
 async def get_task_status(task_id: str):
     """Get the status, logs and result of a specific task."""
