@@ -153,20 +153,15 @@ if (-not $hasNode -or $hasNode -notmatch "v\d") {
 }
 Write-Log "[OK] Node: $hasNode" "Green"
 
+
 # Ensure npm is also on PATH explicitly
 $npmPaths = @(
-    "$env:PROGRAMFILES
-odejs",
-    "$env:ProgramFiles(x86)
-odejs",
-    "$env:APPDATA
-pm",
-    "$env:LOCALAPPDATA\Programs
-odejs"
+    (Join-Path $env:PROGRAMFILES "nodejs"),
+    (Join-Path $env:APPDATA "npm"),
+    (Join-Path $env:LOCALAPPDATA "Programs\nodejs")
 )
 foreach ($p in $npmPaths) {
-    if (Test-Path "$p
-pm.cmd") {
+    if ($p -and (Test-Path (Join-Path $p "npm.cmd"))) {
         if ($env:PATH -notlike "*$p*") { $env:PATH = "$env:PATH;$p" }
     }
 }
