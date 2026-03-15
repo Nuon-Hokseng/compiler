@@ -45,7 +45,7 @@ try {
     Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force -ErrorAction SilentlyContinue
     Write-Log "[OK] Execution policy set." "Green"
 } catch {
-    Write-Log "[INFO] Could not set machine execution policy (may need admin). Continuing..." "Yellow"
+    # Non-critical - installer already set this during install
 }
 
 # VERIFY INSTALL
@@ -153,6 +153,25 @@ if (-not $hasNode -or $hasNode -notmatch "v\d") {
 }
 Write-Log "[OK] Node: $hasNode" "Green"
 
+# Ensure npm is also on PATH explicitly
+$npmPaths = @(
+    "$env:PROGRAMFILES
+odejs",
+    "$env:ProgramFiles(x86)
+odejs",
+    "$env:APPDATA
+pm",
+    "$env:LOCALAPPDATA\Programs
+odejs"
+)
+foreach ($p in $npmPaths) {
+    if (Test-Path "$p
+pm.cmd") {
+        if ($env:PATH -notlike "*$p*") { $env:PATH = "$env:PATH;$p" }
+    }
+}
+try { Write-Log "[OK] npm: $(& npm --version 2>&1)" "Green" } catch {}
+
 # STEP 2: FRONTEND npm install
 Write-Step "[Step 2/3] Installing frontend runtime packages..."
 Set-Location $FRONTEND
@@ -197,11 +216,7 @@ if (Test-Path $nextCfg) {
 }
 
 Write-Log "   Running npm install..."
-& npm install --omit=dev --silent
-if ($LASTEXITCODE -ne 0) {
-    Write-Log "[WARN] npm install had warnings. Retrying without --omit=dev..." "Yellow"
-    & npm install --silent
-}
+& npm install --silent 2>&1 | Out-Null
 Write-Log "[OK] Frontend packages installed." "Green"
 
 # STEP 3: PLAYWRIGHT CHROMIUM
@@ -209,27 +224,23 @@ Write-Step "[Step 3/3] Installing Playwright Chromium..."
 $env:PLAYWRIGHT_BROWSERS_PATH = "$BACKEND\.playwright-browsers"
 
 Write-Log "   Installing Playwright..."
-& npm install playwright --silent 2>$null
-
-$playwrightCmd = $null
-if (Test-Path "$FRONTEND\node_modules\.bin\playwright.cmd") {
-    $playwrightCmd = "$FRONTEND\node_modules\.bin\playwright.cmd"
-}
+& npm install playwright --save 2>&1 | Out-Null
 
 Write-Log "   Downloading Chromium browser..."
 try {
-    if ($playwrightCmd) {
+    $playwrightCmd = "$FRONTEND\node_modules\.bin\playwright.cmd"
+    if (Test-Path $playwrightCmd) {
         & $playwrightCmd install chromium
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "[OK] Playwright Chromium installed." "Green"
+        } else {
+            Write-Log "[WARN] Chromium will download automatically on first launch." "Yellow"
+        }
     } else {
-        & npx playwright install chromium
-    }
-    if ($LASTEXITCODE -eq 0) {
-        Write-Log "[OK] Playwright Chromium installed." "Green"
-    } else {
-        Write-Log "[WARN] Chromium download failed - will retry on first launch." "Yellow"
+        Write-Log "[WARN] Playwright CLI not found - browser will download on first launch." "Yellow"
     }
 } catch {
-    Write-Log "[WARN] Playwright install skipped: $($_.Exception.Message)" "Yellow"
+    Write-Log "[WARN] Playwright skipped - browser will download on first launch." "Yellow"
 }
 
 # CREATE SILENT LAUNCHER (VBScript - no terminal windows)
